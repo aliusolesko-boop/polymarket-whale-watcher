@@ -1,9 +1,21 @@
-"""Anomaly detection service - multi-dimensional scoring for whale trades."""
+"""
+Anomaly detection service — confidence scoring for whale trades.
+
+Mirrors the options flow confidence scoring from llm-trading-agent:
+  Base confidence: 0.50
+  + Premium-to-threshold ratio: +0.20 (sqrt-scaled by market liquidity)
+  + Signal cleanliness (ask ratio): +0.10
+  + Volume/OI equivalent (depth ratio): +0.10
+  + Alert rule / cluster tier: +0.10
+
+Total max = 1.0. Pre-filter threshold = 0.60 (matches options flow pipeline).
+"""
 import logging
+import math
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
 
 from src.config import get_settings
 from src.models.trade import WhaleTrade, TradeActivity, TraderHistory
@@ -15,51 +27,29 @@ logger = logging.getLogger(__name__)
 
 class AnomalyDetector:
     """
-    Multi-dimensional anomaly detection for whale trades.
+    Confidence scoring for whale trades, mirroring options flow pipeline.
 
-    Scoring dimensions:
-    1. Size relative to market (trade vs market 24h volume)
-    2. Price uncertainty (closer to 0.5 = more uncertain = more interesting)
-    3. Time-of-day (off-peak hours = more suspicious)
-    4. Trader deviation (trade size vs trader's historical average)
-    5. Cluster signal (multiple same-direction trades in short window)
+    5-factor scoring (same structure as OptionsFlowSignalProvider._calculate_confidence):
+    1. Base confidence: 0.50
+    2. Premium-to-threshold ratio: +0.20 (trade_size vs dynamic threshold)
+    3. Signal cleanliness: +0.10 (conviction / price displacement)
+    4. Depth ratio: +0.10 (trade_size vs market liquidity, like Volume/OI)
+    5. Cluster tier: +0.10 (repeated same-direction trades, like alert_rule)
     """
 
-    # --- Time-of-day weights (US Eastern Time) ---
-    # Polymarket is US-dominated, so we use ET to judge trading hour anomaly.
-    # Higher weight = more unusual trading hour = more suspicious.
-    _ET_HOUR_WEIGHTS = {
-        # ET 0-5 (midnight to 5am) — very unusual, most suspicious
-        0: 0.6, 1: 0.7, 2: 0.8, 3: 0.9, 4: 0.8, 5: 0.6,
-        # ET 6-8 (early morning) — some early traders
-        6: 0.4, 7: 0.3, 8: 0.2,
-        # ET 9-17 (US business hours) — peak activity, least suspicious
-        9: 0.1, 10: 0.0, 11: 0.0, 12: 0.0, 13: 0.0,
-        14: 0.0, 15: 0.0, 16: 0.0, 17: 0.1,
-        # ET 18-20 (evening) — moderate
-        18: 0.2, 19: 0.2, 20: 0.3,
-        # ET 21-23 (late night) — unusual
-        21: 0.4, 22: 0.5, 23: 0.5,
-    }
-    # UTC offset for US Eastern: -5 (EST) or -4 (EDT).
-    # Use -4 as default (EDT covers ~Mar-Nov, most of the year).
-    _ET_UTC_OFFSET = -4
-
-    # Cluster detection: track recent trades per market
-    # Key: market_id, Value: deque of (timestamp, side, usdc_size)
+    # Cluster detection
     _CLUSTER_WINDOW_SECONDS = 300  # 5 minutes
-    _CLUSTER_MIN_COUNT = 3  # minimum trades for cluster signal
+    _CLUSTER_MIN_COUNT = 3
 
     def __init__(self):
         self.settings = get_settings()
         self.trader_profiler = TraderProfiler()
-        # Recent trades for cluster detection: market_id -> deque
         self._recent_trades: Dict[str, deque] = defaultdict(
             lambda: deque(maxlen=50)
         )
 
     # ================================================================
-    # Core scoring
+    # Core scoring — mirrors OptionsFlowSignalProvider._calculate_confidence
     # ================================================================
 
     def get_anomaly_score(
@@ -70,81 +60,38 @@ class AnomalyDetector:
         market_id: str = "",
     ) -> Tuple[float, dict]:
         """
-        Calculate multi-dimensional anomaly score.
+        Calculate confidence score using options-flow-style 5-factor model.
 
         Returns:
-            (total_score, breakdown_dict) where breakdown has per-dimension scores.
+            (total_score, breakdown_dict) — total in [0.0, 1.0].
         """
         breakdown = {}
 
-        # --- 1. Size score (absolute) ---
-        # $5k=0.1, $20k=0.25, $50k=0.4, $100k+=0.5
-        raw_size = min(0.5, 0.1 + (activity.usdc_size - 5000) / 250000)
-        breakdown["size_abs"] = max(0.0, raw_size)
+        # --- 1. Base confidence: 0.50 ---
+        breakdown["base"] = 0.50
 
-        # --- 2. Size relative to market volume ---
-        if market and market.volume_24hr > 0:
-            # What fraction of 24h volume is this single trade?
-            ratio = activity.usdc_size / market.volume_24hr
-            # ratio 0.001=noise, 0.01=notable, 0.05=significant, 0.1+=massive
-            rel_score = min(0.3, ratio * 6.0)  # 0.05 ratio -> 0.3
-            breakdown["size_relative"] = rel_score
-        else:
-            breakdown["size_relative"] = 0.15  # unknown market volume, use neutral
+        # --- 2. Premium-to-threshold ratio: +0.20 max ---
+        # Mirrors _premium_ratio_bonus: min(0.20, (sqrt(ratio) - 1) * 0.20)
+        # where ratio = trade_size / dynamic_threshold
+        # dynamic_threshold = base_size * sqrt(market_volume / baseline_volume)
+        breakdown["premium_ratio"] = self._premium_ratio_bonus(activity, market)
 
-        # --- 3. Price uncertainty ---
-        # Price is taker's buy price (no normalization).
-        # Lower price = more uncertain/risky bet = more interesting.
-        # 0.5 -> 0.2, 0.3/0.7 -> 0.1, 0.1/0.9 -> 0.0
-        dist = abs(activity.price - 0.5)
-        if dist <= 0.3:
-            price_score = 0.2 * (1 - dist / 0.3)
-        else:
-            price_score = 0.0
-        breakdown["price_uncertainty"] = price_score
+        # --- 3. Signal cleanliness (conviction): +0.10 max ---
+        # Mirrors _ask_ratio_bonus: measures taker aggressiveness.
+        # In options: ASK-side ratio > 0.8 = full bonus.
+        # In Polymarket: price displacement from market mid = conviction.
+        breakdown["signal_clean"] = self._signal_cleanliness_bonus(activity, market)
 
-        # --- 4. Time-of-day ---
-        utc_hour = datetime.utcfromtimestamp(activity.timestamp).hour
-        et_hour = (utc_hour + self._ET_UTC_OFFSET) % 24
-        breakdown["time_of_day"] = self._ET_HOUR_WEIGHTS.get(et_hour, 0.1) * 0.15
+        # --- 4. Depth ratio (like Volume/OI): +0.10 max ---
+        # Mirrors _volume_oi_bonus: trade_size / market_liquidity.
+        # High ratio = new significant positioning.
+        breakdown["depth_ratio"] = self._depth_ratio_bonus(activity, market)
 
-        # --- 5. Trader deviation ---
-        if trader_history and trader_history.avg_trade_size > 0:
-            # How many X of their average is this trade?
-            multiple = activity.usdc_size / trader_history.avg_trade_size
-            # 1x=normal, 2x=notable, 5x=very unusual, 10x+=extreme
-            if multiple >= 5:
-                deviation_score = 0.15
-            elif multiple >= 2:
-                deviation_score = 0.05 + (multiple - 2) / 3 * 0.10
-            else:
-                deviation_score = 0.0
-            breakdown["trader_deviation"] = deviation_score
-        else:
-            # Unknown trader history — slightly suspicious
-            breakdown["trader_deviation"] = 0.05
-
-        # --- 6. Cluster signal ---
-        cluster_score = self._get_cluster_score(activity, market_id=market_id)
-        breakdown["cluster"] = cluster_score
-
-        # --- 7. Niche market bonus ---
-        # Small/niche markets have higher information asymmetry value.
-        # Large political/macro markets (volume > $5M/day) are noisy;
-        # small markets (< $500k/day) are where insider signals matter most.
-        if market and market.volume_24hr > 0:
-            vol = market.volume_24hr
-            if vol < 100_000:
-                niche_score = 0.15  # very niche
-            elif vol < 500_000:
-                niche_score = 0.10
-            elif vol < 2_000_000:
-                niche_score = 0.05
-            else:
-                niche_score = 0.0  # large/macro market, no bonus
-            breakdown["niche_market"] = niche_score
-        else:
-            breakdown["niche_market"] = 0.05
+        # --- 5. Cluster tier (like alert_rule): +0.10 max ---
+        # Mirrors _alert_rule_bonus: repeated same-direction activity.
+        # In options: RepeatedHitsAscendingFill = 0.10, RepeatedHits = 0.07.
+        # In Polymarket: multiple same-direction trades in 5-min window.
+        breakdown["cluster_tier"] = self._cluster_tier_bonus(activity, market_id)
 
         # --- Total ---
         total = sum(breakdown.values())
@@ -152,22 +99,113 @@ class AnomalyDetector:
 
         return total, breakdown
 
-    def record_trade(self, activity: TradeActivity, market_id: str):
-        """Record a trade for cluster detection. Call for every trade, not just whales."""
-        self._recent_trades[market_id].append((
-            activity.timestamp,
-            activity.side,
-            activity.usdc_size,
-        ))
-
-    def _get_cluster_score(self, activity: TradeActivity, market_id: str = "") -> float:
+    @staticmethod
+    def _premium_ratio_bonus(activity: TradeActivity, market: Optional[Market]) -> float:
         """
-        Check if there are multiple same-direction trades in a short window.
+        Trade size vs dynamic threshold, sqrt-scaled.
 
-        A cluster of BUY or SELL in the same market in 5 minutes suggests
-        coordinated or informed trading.
+        Mirrors OptionsFlowSignalProvider._premium_ratio_bonus:
+          threshold = 100K * sqrt(market_cap / 40B)
+          bonus = min(0.20, (sqrt(premium / threshold) - 1) * 0.20)
+
+        Polymarket mapping:
+          threshold = base_size * sqrt(market_volume / baseline_volume)
+          base_size = $5,000, baseline_volume = $1,000,000
         """
-        # Use the same market_id key as record_trade()
+        max_bonus = 0.20
+        trade_size = activity.usdc_size
+
+        if trade_size <= 0:
+            return 0.0
+
+        # Dynamic threshold based on market volume (like market-cap scaling)
+        base_size = 10_000.0
+        baseline_volume = 1_000_000.0
+
+        if market and market.volume > 0:
+            threshold = base_size * math.sqrt(market.volume / baseline_volume)
+            threshold = max(5_000.0, threshold)  # floor $5K
+        else:
+            threshold = base_size
+
+        ratio = trade_size / threshold
+        if ratio <= 1.0:
+            return 0.0
+
+        bonus = (math.sqrt(ratio) - 1) * max_bonus
+        return min(max_bonus, max(0.0, bonus))
+
+    @staticmethod
+    def _signal_cleanliness_bonus(activity: TradeActivity, market: Optional[Market]) -> float:
+        """
+        Taker conviction / price displacement from market mid.
+
+        Mirrors _ask_ratio_bonus logic:
+          ASK ratio > 0.8 → 0.10 (full), > 0.6 → 0.05 (half)
+
+        Polymarket mapping:
+          A buyer paying significantly above market mid = aggressive taker (like ASK-side).
+          Displacement > 5% → 0.10, > 2% → 0.05.
+        """
+        if not market or not market.outcome_prices:
+            return 0.0
+
+        # Get market mid price for the outcome the trader bought
+        if activity.outcome == "Yes":
+            market_mid = market.outcome_prices[0]
+        elif len(market.outcome_prices) > 1:
+            market_mid = market.outcome_prices[1]
+        else:
+            market_mid = 1.0 - market.outcome_prices[0]
+
+        displacement = activity.price - market_mid
+
+        if displacement > 0.05:
+            return 0.10  # strong conviction (like ASK ratio > 0.8)
+        if displacement > 0.02:
+            return 0.05  # moderate conviction (like ASK ratio > 0.6)
+        return 0.0
+
+    @staticmethod
+    def _depth_ratio_bonus(activity: TradeActivity, market: Optional[Market]) -> float:
+        """
+        Trade size vs market liquidity (like Volume/OI).
+
+        Mirrors _volume_oi_bonus:
+          V/OI > 3.0 → 0.10, > 1.5 → 0.07, > 1.0 → 0.03
+
+        Polymarket mapping:
+          depth_ratio = trade_size / market_liquidity
+          > 0.10 → 0.10, > 0.05 → 0.07, > 0.02 → 0.03
+        """
+        if not market or not market.liquidity or market.liquidity <= 0:
+            return 0.0
+
+        ratio = activity.usdc_size / market.liquidity
+
+        if ratio > 0.10:
+            return 0.10
+        if ratio > 0.05:
+            return 0.07
+        if ratio > 0.02:
+            return 0.03
+        return 0.0
+
+    def _cluster_tier_bonus(self, activity: TradeActivity, market_id: str = "") -> float:
+        """
+        Cluster of same-direction trades in short window (like alert_rule tiers).
+
+        Mirrors _alert_rule_bonus tier structure:
+          RepeatedHitsAscendingFill → 0.10
+          RepeatedHits → 0.07
+          SweepsFollowedByFloor → 0.05
+          Single sweep → 0.03
+
+        Polymarket mapping:
+          5+ same-direction trades in 5min → 0.10
+          3-4 trades → 0.07
+          2 trades with large volume → 0.03
+        """
         key = market_id or activity.condition_id
         recent = self._recent_trades.get(key)
         if not recent:
@@ -176,7 +214,6 @@ class AnomalyDetector:
         now = activity.timestamp
         cutoff = now - self._CLUSTER_WINDOW_SECONDS
 
-        # Count same-direction trades in window
         same_dir_count = 0
         same_dir_volume = 0.0
         for ts, side, size in recent:
@@ -184,13 +221,21 @@ class AnomalyDetector:
                 same_dir_count += 1
                 same_dir_volume += size
 
+        if same_dir_count >= 5:
+            return 0.10
         if same_dir_count >= self._CLUSTER_MIN_COUNT:
-            # 3 trades = 0.05, 5+ = 0.10, volume also matters
-            count_score = min(0.10, 0.02 * same_dir_count)
-            vol_bonus = min(0.05, same_dir_volume / 500000)
-            return count_score + vol_bonus
-
+            return 0.07
+        if same_dir_count >= 2 and same_dir_volume > 20_000:
+            return 0.03
         return 0.0
+
+    def record_trade(self, activity: TradeActivity, market_id: str):
+        """Record a trade for cluster detection. Call for every trade, not just whales."""
+        self._recent_trades[market_id].append((
+            activity.timestamp,
+            activity.side,
+            activity.usdc_size,
+        ))
 
     # ================================================================
     # Pre-filter (before LLM)
@@ -202,13 +247,13 @@ class AnomalyDetector:
         market: Optional[Market] = None,
         trader_history: Optional[TraderHistory] = None,
         market_id: str = "",
-        min_score: float = 0.40,
+        min_score: float = 0.65,
     ) -> Tuple[bool, float, dict]:
         """
         Decide whether a whale trade warrants LLM analysis.
 
-        Returns:
-            (should_analyze, score, breakdown)
+        Threshold 0.65: requires at least base (0.50) + one strong factor
+        to trigger LLM analysis.
         """
         score, breakdown = self.get_anomaly_score(
             activity, market, trader_history, market_id=market_id,
@@ -230,9 +275,9 @@ class AnomalyDetector:
     def filter_whale_trades(
         self,
         trades: List[WhaleTrade],
-        min_score: float = 0.5,
+        min_score: float = 0.65,
     ) -> List[WhaleTrade]:
-        """Filter whale trades by anomaly score."""
+        """Filter whale trades by confidence score."""
         filtered = []
         for trade in trades:
             score, _ = self.get_anomaly_score(trade.trade)
@@ -248,16 +293,13 @@ class AnomalyDetector:
         """Analyze the context of a whale trade for LLM input."""
         trade = whale_trade.trade
 
-        # Direction interpretation (only BUY trades, no normalization)
         if trade.outcome == "Yes":
             direction_meaning = f"Trader bought Yes Token @ {trade.price:.4f} — Bullish (believes event will occur)"
         else:
             direction_meaning = f"Trader bought No Token @ {trade.price:.4f} — Bearish (believes event will NOT occur)"
 
-        # Buy price directly reflects taker's conviction — lower price = higher odds bet
         implied_prob = trade.price
 
-        # Market state
         market_state = "uncertain"
         if whale_trade.market_outcome_prices:
             max_price = max(whale_trade.market_outcome_prices)
@@ -266,7 +308,6 @@ class AnomalyDetector:
             elif max_price < 0.6:
                 market_state = "highly uncertain"
 
-        # Multi-dimensional anomaly score
         score, breakdown = self.get_anomaly_score(trade)
 
         return {
@@ -289,12 +330,10 @@ class AnomalyDetector:
         context = self.analyze_trade_context(whale_trade)
         trade = whale_trade.trade
 
-        # Build outcome prices string
         prices_str = ""
         for outcome, price in zip(context["market_outcomes"], context["current_prices"]):
             prices_str += f"  - {outcome}: {price:.2%}\n"
 
-        # Trader profile
         trader_profile = self.trader_profiler.generate_profile(
             wallet_address=trade.proxy_wallet or "Unknown",
             ranking=whale_trade.trader_ranking,
@@ -302,15 +341,13 @@ class AnomalyDetector:
         )
         trader_profile_str = self.trader_profiler.format_profile_for_llm(trader_profile)
 
-        # Anomaly breakdown string
         bd = context["anomaly_breakdown"]
         breakdown_str = (
-            f"  Absolute size: {bd.get('size_abs', 0):.2f} | "
-            f"Relative to market: {bd.get('size_relative', 0):.2f} | "
-            f"Price uncertainty: {bd.get('price_uncertainty', 0):.2f} | "
-            f"Time of day: {bd.get('time_of_day', 0):.2f} | "
-            f"Trader deviation: {bd.get('trader_deviation', 0):.2f} | "
-            f"Cluster signal: {bd.get('cluster', 0):.2f}"
+            f"  Base: {bd.get('base', 0):.2f} | "
+            f"Premium ratio: {bd.get('premium_ratio', 0):.2f} | "
+            f"Signal clean: {bd.get('signal_clean', 0):.2f} | "
+            f"Depth ratio: {bd.get('depth_ratio', 0):.2f} | "
+            f"Cluster tier: {bd.get('cluster_tier', 0):.2f}"
         )
 
         return f"""
@@ -323,7 +360,7 @@ class AnomalyDetector:
 - **Trade time**: {datetime.fromtimestamp(trade.timestamp).strftime('%Y-%m-%d %H:%M:%S UTC')}
 - **Trader wallet**: {trade.proxy_wallet or 'Unknown'}
 
-### Anomaly Score
+### Confidence Score
 - **Overall score**: {context['anomaly_score']:.2f}/1.00
 - **Score breakdown**:
 {breakdown_str}

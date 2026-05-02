@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # Maximum tool-use rounds to prevent infinite loops
 # 14 tools available; LLM can call multiple per round but may need
 # several rounds for chain-of-investigation (search → discover → verify)
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 3
 
 
 class LLMAnalyzer:
@@ -259,12 +259,25 @@ class LLMAnalyzer:
 
             # Tool-use loop
             for round_idx in range(MAX_TOOL_ROUNDS + 1):
+                # Last round: no tools, force final answer
+                is_last_round = (round_idx == MAX_TOOL_ROUNDS)
+                if is_last_round:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have used all available tool rounds. "
+                            "Based on all information gathered, provide your final "
+                            "analysis and output the JSON assessment now."
+                        ),
+                    })
+
                 # Call LLM
                 call_kwargs = {
                     "model": self.settings.llm_model,
                     "messages": messages,
+                    "max_tokens": 4096,
                 }
-                if tool_schemas and round_idx < MAX_TOOL_ROUNDS:
+                if tool_schemas and not is_last_round:
                     call_kwargs["tools"] = tool_schemas
                     call_kwargs["tool_choice"] = "auto"
 
@@ -289,10 +302,13 @@ class LLMAnalyzer:
 
                 # No tool calls — final response
                 analysis_text = msg.content or ""
+                finish_reason = response.choices[0].finish_reason
                 logger.info(
                     f"Analysis complete after {round_idx + 1} round(s) "
-                    f"({len(analysis_text)} chars)"
+                    f"({len(analysis_text)} chars, finish={finish_reason})"
                 )
+                if len(analysis_text) < 200:
+                    logger.warning(f"Suspiciously short response: {analysis_text[:200]}")
                 break
 
             # Parse JSON decision from final response

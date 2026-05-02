@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Polymarket](https://img.shields.io/badge/Polymarket-Official_API-purple.svg)](https://docs.polymarket.com/)
 
-Real-time monitoring | Multi-dimensional anomaly detection | LLM investigation with 14 autonomous tools | Signal accuracy tracking
+Real-time monitoring | Tiered market coverage | LLM investigation with 14 autonomous tools | Signal accuracy tracking
 
 [Quick Start](#-quick-start) | [How It Works](#-how-it-works) | [Features](#-features) | [Configuration](#-configuration) | [Dashboard](#-dashboard)
 
@@ -18,11 +18,11 @@ Real-time monitoring | Multi-dimensional anomaly detection | LLM investigation w
 
 ## What It Does
 
-Whale Watcher continuously monitors 50+ trending Polymarket markets, detects large trades with anomalous patterns, and uses an LLM agent with 14 autonomous research tools to investigate whether the trader may possess an information advantage. It tracks signal accuracy over time, achieving **63.5% win rate** with **+28.3% average ROI** on high-confidence signals.
+Whale Watcher continuously monitors **700+ active Polymarket markets** across three volume tiers, detects large trades with anomalous patterns, and uses an LLM agent with **14 autonomous research tools** to investigate whether the trader may possess an information advantage. It tracks signal accuracy over time, generates daily briefings, and sends real-time email alerts for high-confidence signals.
 
 ```
-Trending Markets → Whale Detection → Anomaly Scoring → LLM Investigation → Signal Tracking
-     (50+)          ($1k-$100k+)      (5 dimensions)    (14 tools, 5 rounds)  (win rate, ROI)
+Tiered Markets  →  Whale Detection  →  Anomaly Scoring  →  LLM Investigation  →  Signal Tracking
+   (700+)           ($5k-$100k+)       (5 dimensions)     (14 tools, 3 rounds)   (win rate, ROI)
 ```
 
 ---
@@ -35,35 +35,36 @@ Trending Markets → Whale Detection → Anomaly Scoring → LLM Investigation �
 ```
 $ python -m src.main run
 
-╭──────────────────────────────────────────────────────────╮
-│              🐋 Polymarket Whale Watcher                 │
-│                                                          │
-│  Markets Monitored:  50                                  │
-│  Polling Interval:   15s                                 │
-│  Min Trade Size:     $1,000                              │
-│  Price Range:        0 - 0.7                             │
-╰──────────────────────────────────────────────────────────╯
+============================================================
+WHALE WATCHER STARTED
+============================================================
+Monitoring: 765 markets
+Interval: 10 seconds
+Min Trade Size: $10,000 USD
+Price Range: 0.1 - 0.9
+============================================================
 
-[14:22:51] 🐋 WHALE DETECTED on "Will MegaETH launch a token by June 30, 2026?"
-           BUY Yes @ 0.4200 | $92,336 USDC | Wallet: 0x7a3b...f91e
-           Anomaly Score: 0.78/1.00
+Tiered monitoring: Tier1=8 (>500K), Tier2=198 (>10K), Tier3=559 (>1K)
 
-[14:22:53] 🤖 LLM Analysis started (model: gemini-3-flash-preview)
-           → Tool call: search_web("MegaETH token launch date 2026")
-           → Tool call: search_twitter("MegaETH $METH token TGE")
-           → Tool call: get_protocol_tvl("megaeth")
-           → Tool call: get_contract_info("0x4f9b...2a1c")
-           → Tool call: search_telegram("MegaETH launch")
+[22:05:14] WHALE TRADE DETECTED!
+           Amount: $5,000.00 USDC
+           Side: BUY Yes
+           Price: 0.7962
+           Market: Over $20M committed to the Printr public sale?
 
-[14:23:07] ✅ Analysis complete
-           Information Asymmetry Score: 0.72 (HIGH)
-           Recommendation: BUY Yes | Confidence: 0.75
-           Report saved: reports/20260415/...
+           Generating analysis report...
+           Round 1: LLM requested 3 tool call(s)
+           → search_web("Printr public sale Sonar raise commitments")
+           → search_twitter("Printr PRINT token sale commitments")
+           → search_telegram("Printr public sale Sonar raise")
+           Round 2: LLM requested 2 tool call(s)
+           → search_web("Printr PRINT token sale total raised April 28")
+           → search_twitter("Printr sale oversubscribed April 28")
 
-[15:00:00] 📊 Resolution check: 3 markets resolved
-           → "EdgeX FDV above 400M" resolved YES — Signal CORRECT (ROI: +142%)
-           → "Will Trump talk to Rutte" resolved NO — Signal INCORRECT
-           → "Over 9M committed to P2P" resolved YES — Signal CORRECT (ROI: +67%)
+           Analysis complete after 3 round(s)
+           Information Asymmetry Score: 0.22 (LOW)
+           Trader Credibility: LOW (#2650076, PnL: -$207K)
+           Report saved: reports/20260428/...
 ```
 
 </details>
@@ -75,13 +76,10 @@ Each whale trade generates a detailed markdown report:
 
 - **Trade details** — amount, direction, price, trader wallet
 - **Trader profile** — leaderboard rank, PnL, history, recent trades
+- **Event positions** — whale's positions across related markets (hedge detection)
+- **Market top holders** — Top 5 buyers/sellers with rankings
 - **LLM investigation** — autonomous tool calls (web, Twitter, Telegram, on-chain, DeFi)
 - **Information asymmetry assessment** — score, evidence, reasoning
-
-Example finding:
-> *"New ERC-20 contract deployed by MegaETH deployer wallet 6 hours before trade — not yet publicly announced. KOL tweets about insider knowledge preceded the trade by ~3 hours."*
->
-> **Information Asymmetry Score: 0.72** | Trader Credibility: HIGH
 
 See full example: [docs/examples/sample_report.md](docs/examples/sample_report.md)
 
@@ -90,16 +88,11 @@ See full example: [docs/examples/sample_report.md](docs/examples/sample_report.m
 <details>
 <summary><b>Daily Briefing</b> — Automated intelligence summary</summary>
 
-Daily briefings include:
-- High-confidence signals with analysis
+Daily briefings are generated at 10:00 AM local time and emailed automatically. They include:
+- High-confidence signals (IAS >= 60%) with full analysis
+- Fallback: top 5 signals by score if none reach 60%
 - Price volatility alerts
 - Historical signal performance (win rate, ROI by confidence tier)
-
-| Metric | Value |
-|--------|-------|
-| Win Rate | **63.5%** |
-| Avg ROI | **+28.3%** |
-| Signals with IAS >= 60% | 3 today |
 
 See full example: [docs/examples/sample_briefing.md](docs/examples/sample_briefing.md)
 
@@ -130,7 +123,7 @@ Then add your API key and start:
 echo "GEMINI_API_KEY=your_key_here" >> .env
 
 # Activate the environment and run
-source venv/bin/activate
+source .venv/bin/activate
 python -m src.main run
 ```
 
@@ -143,33 +136,20 @@ docker build -t whale-watcher .
 docker run --env-file .env -v ./data:/app/data -v ./reports:/app/reports whale-watcher
 ```
 
-### Make Commands
-
-```bash
-make setup       # One-click setup
-make run         # Start monitoring
-make run-debug   # Start with debug logging
-make dashboard   # Start web dashboard
-make markets     # View trending markets
-make briefing    # Generate today's briefing
-make help        # Show all commands
-```
-
 ---
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Real-Time Monitoring** | Parallel per-market polling of 50+ trending markets |
-| **Anomaly Detection** | 5-dimensional scoring: size, price uncertainty, time-of-day, trader deviation, cluster signals |
-| **Trader Profiling** | Leaderboard ranking, PnL, trading history, recent behavior |
-| **LLM Analysis** | 14 autonomous tools across 5 rounds of investigation |
-| **Signal Tracking** | Automatic market resolution checking, win rate stats by confidence tier |
-| **Daily Briefing** | Automated 10:00 AM summary with high-confidence signals |
+| **Tiered Market Monitoring** | 700+ markets across 3 tiers: Tier1 (>$500K, 15s), Tier2 (>$10K, 60s), Tier3 (>$1K, 300s) |
+| **Anomaly Detection** | 5-factor scoring: premium ratio, signal cleanliness, depth ratio, cluster signals, base confidence |
+| **Trader Profiling** | Leaderboard ranking, PnL, trading history, event positions, market top holders |
+| **LLM Analysis** | 14 autonomous tools across up to 3 rounds of investigation |
+| **Signal Tracking** | Automatic market resolution checking every 30 min, win rate stats by confidence tier |
+| **Daily Briefing** | Automated 10:00 AM summary with high-confidence signals, emailed to configured recipients |
 | **Email Alerts** | Real-time notifications for high information-asymmetry signals (>= 60%) |
 | **Web Dashboard** | FastAPI-based signal performance dashboard |
-| **Official API** | Works with Polymarket's public API — no private API access needed |
 
 ### 14 LLM Research Tools
 
@@ -178,11 +158,10 @@ The LLM agent autonomously selects and uses these tools during investigation:
 | Category | Tools |
 |----------|-------|
 | **Social Sentiment** | `search_twitter`, `search_telegram`, `search_web` |
-| **Crypto Data** | `get_crypto_price`, `get_defi_metrics`, `get_token_unlocks` |
-| **Financial Data** | `get_stock_price`, `get_economic_indicators` |
-| **On-Chain** | `get_wallet_transactions`, `get_contract_info` |
-| **Legislation** | `search_congress` |
-| **Market Data** | `get_market_history`, `get_trader_positions` |
+| **Crypto Data** | `get_crypto_price`, `get_crypto_market_overview`, `get_protocol_tvl`, `get_token_unlocks`, `get_protocol_revenue` |
+| **Financial Data** | `get_stock_price`, `get_stock_news`, `get_economic_data` |
+| **On-Chain** | `get_wallet_transfers`, `get_contract_info` |
+| **Legislation** | `get_bill_status`, `get_recent_legislation` |
 
 ---
 
@@ -191,12 +170,12 @@ The LLM agent autonomously selects and uses these tools during investigation:
 ```mermaid
 flowchart LR
     A[Polymarket API] --> B[Market Fetcher]
-    B --> C[50+ Trending Markets]
+    B --> C[700+ Tiered Markets]
     C --> D[Trade Monitor]
     D --> E{Whale Trade?}
     E -->|No| D
     E -->|Yes| F[Anomaly Detector]
-    F --> G{Score > Threshold?}
+    F --> G{Score >= 0.65?}
     G -->|No| D
     G -->|Yes| H[LLM Analyzer]
     H --> I[14 Research Tools]
@@ -207,20 +186,28 @@ flowchart LR
 
 ### Pipeline
 
-1. **Market Selection** — Fetches top trending markets by 24h volume from Polymarket, filters out sports/weather/short-term price markets, refreshes every 15 minutes
+1. **Market Selection** — Fetches all active markets from Polymarket Gamma API, classifies into 3 tiers by 24h volume, adds token launch markets. Refreshes every 15 minutes.
 
-2. **Trade Monitoring** — Runs parallel async tasks per market, polls for new trades incrementally, deduplicates by transaction hash
+2. **Trade Monitoring** — Runs parallel async tasks per market (one task per market), polls official Polymarket data-api for new taker BUY trades, deduplicates by transaction hash. Connection pool tuned for 700+ concurrent markets.
 
-3. **Anomaly Detection** — Multi-dimensional scoring on 5 axes:
-   - **Size** — Trade size relative to market 24h volume
-   - **Price uncertainty** — Closer to 0.5 = more interesting
-   - **Time-of-day** — ET hour-based suspicion weights
-   - **Trader deviation** — Trade size vs trader's historical average
-   - **Cluster signal** — Same-direction trades within 5-minute window
+3. **Whale Pre-filter** — Multi-layer filter chain:
+   - Price range: 0.10 - 0.90
+   - Minimum size: $5,000 hard floor
+   - Dynamic threshold: $10K base, scaled by market volume (floor $5K, cap $100K)
+   - Conviction check: must pay above market mid price
+   - Resolution window: 6 hours to 90 days
 
-4. **LLM Investigation** — Builds rich context (trade + trader profile + market data), LLM autonomously uses tools to investigate (up to 5 rounds), produces structured recommendation with information asymmetry score
+4. **Anomaly Scoring** — 5-factor model (max 1.0):
+   - Base confidence: 0.50
+   - Premium-to-threshold ratio: +0.20
+   - Signal cleanliness (conviction): +0.10
+   - Depth ratio (size vs liquidity): +0.10
+   - Cluster tier (repeated same-direction): +0.10
+   - Threshold: >= 0.65 to trigger LLM analysis
 
-5. **Signal Tracking** — Resolution tracker checks every 30 minutes for resolved markets, validates signal correctness, computes theoretical ROI, aggregates win rates by confidence tier
+5. **LLM Investigation** — Builds rich context (trade + trader profile + event positions + market top holders + historical signals), LLM autonomously uses tools for up to 3 rounds, produces structured assessment with information asymmetry score (0-1).
+
+6. **Signal Tracking** — Resolution tracker checks every 30 minutes for resolved markets, validates signal correctness, computes theoretical ROI. Daily briefings generated at 10:00 AM and emailed.
 
 ---
 
@@ -232,35 +219,57 @@ Copy `.env.example` to `.env` and configure:
 
 | Variable | Description | Get It |
 |----------|-------------|--------|
-| `GEMINI_API_KEY` | Gemini API key for LLM analysis | [Google AI Studio](https://aistudio.google.com/apikey) |
-
-### Trade Data Source
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRADE_API_MODE` | `official` | `official` = Polymarket public API (no auth needed), `internal` = private API |
-
-The bot works out of the box with Polymarket's official public API. No private API access required.
+| `GEMINI_API_KEY` | LLM API key for analysis | [Google AI Studio](https://aistudio.google.com/apikey) |
 
 ### Optional (enhances analysis)
 
 | Variable | Description | Get It |
 |----------|-------------|--------|
 | `TAVILY_API_KEY` | Web search (primary) | [tavily.com](https://tavily.com) |
-| `TWITTER_API_KEY` | Twitter sentiment search | [Twitter Developer](https://developer.twitter.com) |
+| `SERPER_API_KEY` | Web search (fallback) | [serper.dev](https://serper.dev) |
+| `TWITTER_API_KEY` | Twitter sentiment search | [twitterapi.io](https://twitterapi.io) |
 | `POLYGON_API_KEY` | Stock/ETF/forex data | [polygon.io](https://polygon.io) |
 | `FRED_API_KEY` | Economic indicators | [FRED](https://fred.stlouisfed.org/docs/api/api_key.html) |
-| `ETHERSCAN_API_KEY` | On-chain wallet analysis | [etherscan.io](https://etherscan.io/apis) |
+| `ETHERSCAN_API_KEY` | On-chain wallet analysis (Polygon V2) | [etherscan.io](https://etherscan.io/apis) |
 | `CONGRESS_API_KEY` | US legislation data | [congress.gov](https://api.congress.gov/) |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | Telegram channel monitoring | [my.telegram.org](https://my.telegram.org) |
+
+### LLM Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_MODEL` | `gemini-3-flash-preview` | Model name (any OpenAI-compatible) |
+| `LLM_BASE_URL` | Google AI endpoint | OpenAI-compatible API base URL |
+| `LLM_TEMPERATURE` | `0` | LLM temperature |
 
 ### Whale Detection Tuning
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIN_TRADE_SIZE_USD` | `1000` | Minimum trade size to consider |
-| `MIN_PRICE` / `MAX_PRICE` | `0` / `0.7` | Price range filter |
-| `FETCH_INTERVAL_SECONDS` | `15` | Polling interval per market |
-| `TRENDING_MARKETS_LIMIT` | `50` | Number of markets to monitor |
+| `MIN_TRADE_SIZE_USD` | `10000` | Minimum trade size to consider |
+| `MIN_PRICE` / `MAX_PRICE` | `0.10` / `0.90` | Price range filter |
+| `FETCH_INTERVAL_SECONDS` | `10` | Default polling interval |
+
+### Tiered Market Monitoring
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FULL_MARKET_SCAN` | `true` | Enable tiered monitoring (all active markets) |
+| `TIER1_VOLUME_MIN` | `500000` | Tier 1 volume threshold |
+| `TIER2_VOLUME_MIN` | `10000` | Tier 2 volume threshold |
+| `TIER3_VOLUME_MIN` | `1000` | Tier 3 volume threshold |
+| `TIER1_POLL_INTERVAL` | `15` | Tier 1 polling interval (seconds) |
+| `TIER2_POLL_INTERVAL` | `60` | Tier 2 polling interval (seconds) |
+| `TIER3_POLL_INTERVAL` | `300` | Tier 3 polling interval (seconds) |
+
+### Email Alerts
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMAIL_ENABLED` | `false` | Enable email notifications |
+| `EMAIL_SENDER` | — | Sender email address |
+| `EMAIL_PASSWORD` | — | Sender email password (app password) |
+| `EMAIL_RECIPIENT` | — | Comma-separated recipient emails |
 
 ---
 
@@ -270,6 +279,8 @@ The bot works out of the box with Polymarket's official public API. No private A
 # Core
 python -m src.main run [--debug]              # Start monitoring
 python -m src.main check-markets --limit 20   # View trending markets
+
+# Analysis
 python -m src.main test-analyze <market_id>   # Test LLM on a specific market
 
 # Reports
@@ -312,20 +323,28 @@ src/
 │   ├── trade.py                    # TradeActivity, WhaleTrade, TraderRanking
 │   ├── decision.py                 # TradeRecommendation, LLMDecision
 │   └── anomaly_signal.py           # AnomalySignal (stored signal)
-├── services/                       # Business logic (23 modules)
-│   ├── market_fetcher.py           # Polymarket Gamma API
-│   ├── trade_monitor.py            # Per-market parallel monitoring (official + internal API)
-│   ├── anomaly_detector.py         # Multi-dimensional anomaly scoring
-│   ├── llm_analyzer.py             # LLM with tool-use (14 tools, 5 rounds)
+├── services/                       # Business logic
+│   ├── market_fetcher.py           # Polymarket Gamma API (tiered market selection)
+│   ├── trade_monitor.py            # Per-market parallel monitoring (official API)
+│   ├── anomaly_detector.py         # 5-factor anomaly scoring
+│   ├── llm_analyzer.py             # LLM with tool-use (14 tools, 3 rounds)
 │   ├── tools.py                    # Tool registry
 │   ├── resolution_tracker.py       # Market resolution checking
 │   ├── stats_engine.py             # Performance statistics
-│   ├── daily_briefing.py           # Daily summary generation
-│   └── [data services]             # Twitter, Telegram, CoinGecko, DeFiLlama,
-│                                   # FRED, Polygon, Etherscan, Congress, web search
+│   ├── daily_briefing.py           # Daily summary generation + email
+│   ├── twitter_search.py           # Twitter API search
+│   ├── telegram_search.py          # Telegram channel monitoring
+│   ├── web_search.py               # Tavily/Serper/DuckDuckGo search
+│   ├── coingecko.py                # Crypto prices and market data
+│   ├── defillama.py                # DeFi TVL, revenue, token unlocks
+│   ├── fred.py                     # FRED macroeconomic data
+│   ├── polygon.py                  # Stock/ETF prices and news
+│   ├── etherscan.py                # On-chain data (Polygon, Etherscan V2)
+│   └── congress.py                 # US legislation data
+├── prompts/                        # LLM system prompts
+│   ├── whale_analyzer.py           # Whale trade analysis prompt
+│   └── volatility_analyzer.py      # Price volatility analysis prompt
 ├── db/database.py                  # SQLite signal storage
-├── prompts/                        # LLM system prompts & tool schemas
-├── dashboard.py                    # FastAPI web dashboard
 └── main.py                         # CLI entry point (Typer)
 ```
 
@@ -334,59 +353,54 @@ src/
 ## Architecture
 
 ```
-                    ┌─────────────────────────────┐
-                    │    Polymarket Gamma API      │
-                    │  (trending markets, prices)  │
-                    └──────────────┬──────────────┘
+                    ┌──────────────────────────────┐
+                    │     Polymarket Gamma API      │
+                    │   (all active markets)        │
+                    └──────────────┬───────────────┘
                                    │
-                    ┌──────────────▼──────────────┐
-                    │       Market Fetcher         │
-                    │  (filter sports/weather/etc) │
-                    └──────────────┬──────────────┘
+                    ┌──────────────▼───────────────┐
+                    │        Market Fetcher         │
+                    │  Tier1: >$500K  (15s poll)    │
+                    │  Tier2: >$10K   (60s poll)    │
+                    │  Tier3: >$1K    (300s poll)   │
+                    └──────────────┬───────────────┘
                                    │
               ┌────────────────────▼────────────────────┐
-              │         Trade Monitor (async)           │
-              │  50+ parallel market polling tasks      │
-              │  Official API ←→ Internal API (switch)  │
+              │       Trade Monitor (async, 700+)       │
+              │   Official Polymarket data-api           │
+              │   Per-market parallel tasks              │
+              │   Pool: 50 connections, 120s timeout     │
               └────────────────────┬────────────────────┘
                                    │
               ┌────────────────────▼────────────────────┐
-              │         Anomaly Detector                │
-              │  5-axis scoring: size, price, time,     │
-              │  trader deviation, cluster signals      │
+              │          Pre-filter + Scoring            │
+              │  $5K+ size, 0.10-0.90 price, conviction │
+              │  5-factor anomaly score >= 0.65          │
               └────────────────────┬────────────────────┘
                                    │
               ┌────────────────────▼────────────────────┐
-              │         LLM Analyzer (Gemini)           │
-              │  14 tools × 5 rounds of investigation   │
+              │       LLM Analyzer (14 tools)           │
+              │   Up to 3 rounds of investigation       │
+              │   max_tokens: 4096                      │
               ├─────────┬────────┬────────┬─────────────┤
               │ Twitter │  Web   │ DeFi   │  On-Chain   │
-              │Telegram │ Search │ Crypto │  Congress   │
+              │Telegram │ Search │ Crypto │  Legislation│
               └─────────┴───┬────┴────────┴─────────────┘
                             │
               ┌─────────────▼──────────────────────────┐
               │     Signal Storage (SQLite)             │
               │  → Resolution Tracker (every 30min)    │
-              │  → Stats Engine (win rate, ROI)        │
-              │  → Dashboard (FastAPI)                 │
+              │  → Daily Briefing (10:00 AM + email)   │
               │  → Email Alerts (IAS >= 60%)           │
+              │  → Dashboard (FastAPI)                 │
               └────────────────────────────────────────┘
 ```
 
 ---
 
-## Safety
-
-- Trade execution **disabled by default** (`ENABLE_TRADE_EXECUTION=false`)
-- Position size capped at 20% of balance if enabled
-- Minimum 60% confidence threshold for execution
-- Price range filter avoids obvious outcomes
-- All decisions logged for audit trail
-- Rate limiting on all external APIs
-
 ## Disclaimer
 
-This system is for research and educational purposes. Prediction market trading involves significant risk. Never trade with funds you cannot afford to lose. Always verify recommendations independently.
+This system is for research and educational purposes. Prediction market trading involves significant risk. The information asymmetry scores and analyses are AI-generated estimates, not financial advice. Always verify independently.
 
 ---
 

@@ -230,17 +230,58 @@ class WhaleWatcher:
 
     async def refresh_markets(self) -> None:
         """Fetch and update the list of monitored markets."""
+        if self.settings.full_market_scan:
+            await self._refresh_markets_tiered()
+        else:
+            await self._refresh_markets_legacy()
+
+    async def _refresh_markets_tiered(self) -> None:
+        """Full-coverage tiered monitoring (mirrors options flow passive approach)."""
+        logger.info("Fetching ALL active markets for tiered monitoring...")
+
+        tiers = self.market_fetcher.get_tiered_markets()
+
+        # Also merge token launch markets into appropriate tiers
+        existing_ids = set()
+        for tier_markets in tiers.values():
+            for tm in tier_markets:
+                existing_ids.add(tm.market.id)
+
+        token_markets = self.market_fetcher.get_token_launch_markets()
+        token_added = 0
+        for tm in token_markets:
+            if tm.market.id not in existing_ids:
+                # Assign to tier based on volume
+                vol = tm.volume_24hr
+                if vol >= self.settings.tier1_volume_min:
+                    tiers["tier1"].append(tm)
+                elif vol >= self.settings.tier2_volume_min:
+                    tiers["tier2"].append(tm)
+                else:
+                    tiers["tier3"].append(tm)
+                existing_ids.add(tm.market.id)
+                token_added += 1
+
+        if token_added:
+            logger.info(f"Added {token_added} token launch markets to tiers")
+
+        total = sum(len(v) for v in tiers.values())
+        if total > 0:
+            self.trade_monitor.set_tiered_markets(tiers)
+            logger.info(f"Tiered monitoring active: {total} markets total")
+        else:
+            logger.error("Failed to fetch any markets")
+
+    async def _refresh_markets_legacy(self) -> None:
+        """Original Top-N trending markets mode."""
         logger.info("Fetching trending markets...")
 
         trending_markets = self.market_fetcher.get_trending_markets(
             limit=self.settings.trending_markets_limit
         )
 
-        # Additionally scan for specialized market categories
-        # that may not be in the top trending list
         existing_ids = {tm.market.id for tm in trending_markets}
 
-        # 1. Token launch / crypto project markets
         token_markets = self.market_fetcher.get_token_launch_markets()
         token_added = 0
         for tm in token_markets:

@@ -7,19 +7,25 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-ETHERSCAN_API = "https://api.etherscan.io/api"
+ETHERSCAN_API_V2 = "https://api.etherscan.io/v2/api"
 
-# Well-known ERC-20 token contracts on Ethereum mainnet
+# Default chain: Polygon (137) where Polymarket operates.
+# Ethereum mainnet = 1, can be overridden per-call.
+DEFAULT_CHAIN_ID = 137
+
+# Well-known ERC-20 token contracts on Polygon
 TOKEN_CONTRACTS = {
-    "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-    "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7",
-    "WETH": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-    "DAI": "0x6b175474e89094c44da98b954eedeac495271d0f",
+    "USDC": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",   # USDC native on Polygon
+    "USDC.e": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", # USDC.e (bridged) on Polygon
+    "USDT": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+    "WETH": "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    "DAI": "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
 }
 
 # Decimals per token (used for converting raw amounts)
 TOKEN_DECIMALS = {
     "USDC": 6,
+    "USDC.e": 6,
     "USDT": 6,
     "WETH": 18,
     "DAI": 18,
@@ -65,10 +71,11 @@ class EtherscanService:
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
 
-    def _get(self, params: dict) -> dict:
-        """Make authenticated GET request to Etherscan API."""
+    def _get(self, params: dict, chain_id: int = DEFAULT_CHAIN_ID) -> dict:
+        """Make authenticated GET request to Etherscan V2 API."""
         params["apikey"] = self.api_key
-        resp = self._client.get(ETHERSCAN_API, params=params)
+        params["chainid"] = chain_id
+        resp = self._client.get(ETHERSCAN_API_V2, params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -111,18 +118,30 @@ class EtherscanService:
 
             # Filter by token if not "ALL"
             if token_upper != "ALL":
-                contract = TOKEN_CONTRACTS.get(token_upper, "").lower()
-                if contract:
+                # For USDC, match both native and bridged (USDC.e) contracts
+                if token_upper == "USDC":
+                    allowed = {
+                        TOKEN_CONTRACTS.get("USDC", "").lower(),
+                        TOKEN_CONTRACTS.get("USDC.e", "").lower(),
+                    }
+                    allowed.discard("")
                     transfers = [
                         tx for tx in transfers
-                        if tx.get("contractAddress", "").lower() == contract
+                        if tx.get("contractAddress", "").lower() in allowed
                     ]
                 else:
-                    # Try matching by symbol in the response
-                    transfers = [
-                        tx for tx in transfers
-                        if tx.get("tokenSymbol", "").upper() == token_upper
-                    ]
+                    contract = TOKEN_CONTRACTS.get(token_upper, "").lower()
+                    if contract:
+                        transfers = [
+                            tx for tx in transfers
+                            if tx.get("contractAddress", "").lower() == contract
+                        ]
+                    else:
+                        # Try matching by symbol in the response
+                        transfers = [
+                            tx for tx in transfers
+                            if tx.get("tokenSymbol", "").upper() == token_upper
+                        ]
 
             if not transfers:
                 return f"No {token_upper} transfers found for {_short_address(addr)} in the last 20 token transactions."

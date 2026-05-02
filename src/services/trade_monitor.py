@@ -2,7 +2,7 @@
 Trade monitoring service - per-market parallel architecture.
 
 Each market runs its own independent async task that:
-1. Polls the internal API for new trades (incremental via start_ts)
+1. Polls the official Polymarket data-api for new trades
 2. Detects whale trades
 3. Fetches trader ranking + history in parallel
 4. Fires the whale callback (LLM report generation) without blocking other markets
@@ -12,6 +12,7 @@ Modeled after paper_trading/paper_trading.py's _market_loop pattern.
 import asyncio
 import json
 import logging
+import random
 import time as _time
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Gamma API for fetching latest market prices
 GAMMA_API_URL = "https://gamma-api.polymarket.com/markets"
 
-# Internal API for trade data (more stable than official data-api)
+# Official Polymarket data-api for trade data
 # URL and key loaded from settings (.env)
 
 # File to persist processed transaction hashes
@@ -52,32 +53,27 @@ class TradeMonitor:
     ):
         self.settings = get_settings()
 
-        # Official API (for trader ranking/history queries only)
+        # Official Polymarket data-api
         self.data_api_url = "https://data-api.polymarket.com"
         self.trades_endpoint = f"{self.data_api_url}/trades"
         self.leaderboard_endpoint = f"{self.data_api_url}/v1/leaderboard"
-        self._client = httpx.AsyncClient(timeout=30.0)
-
-        # Internal API client for trade data
-        self._internal_api_url = self.settings.internal_api_url
-        self._internal_client = httpx.AsyncClient(
-            timeout=30.0,
-            headers={
-                "X-API-Key": self.settings.internal_api_key,
-                "Accept": "application/json",
-                "Accept-Encoding": "gzip",
-            },
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, pool=120.0),
+            limits=httpx.Limits(
+                max_connections=50,
+                max_keepalive_connections=20,
+                keepalive_expiry=30,
+            ),
         )
 
         # Per-market last-fetch timestamps for incremental polling
         self._market_last_ts: Dict[str, int] = {}
 
-        # Global rate limiter for internal API (matches paper_trading: 5 QPS max)
-        # NOTE: Lock created lazily in run() to avoid "attached to different loop" error
+        # Rate limiter: Lock + Semaphore created lazily in run() to avoid "attached to different loop" error
         self._api_lock: Optional[asyncio.Lock] = None
         self._api_sem: Optional[asyncio.Semaphore] = None  # concurrency limiter
         self._api_last_request: float = 0.0
-        self._api_global_interval: float = 1.0  # min 1s between requests = 1 QPS
+        self._api_global_interval: float = 0.2  # min 0.2s between requests = 5 QPS
 
         # Cache for trader rankings to avoid repeated API calls
         self._trader_ranking_cache: Dict[str, TraderRanking] = {}
@@ -143,7 +139,6 @@ class TradeMonitor:
         """Cleanup resources."""
         self._save_processed_txns()
         await self._client.aclose()
-        await self._internal_client.aclose()
 
     # ================================================================
     # Market list management
@@ -157,28 +152,46 @@ class TradeMonitor:
                 self._monitored_markets[tm.market.id] = tm.market
         logger.info(f"Now monitoring {len(self._monitored_markets)} markets")
 
+    def set_tiered_markets(self, tiers: dict[str, list]) -> None:
+        """
+        Set markets with per-tier poll intervals.
+
+        Stores poll_interval per market_id in _market_poll_intervals dict.
+        """
+        self._monitored_markets = {}
+        self._market_poll_intervals: dict[str, int] = {}
+
+        tier_intervals = {
+            "tier1": self.settings.tier1_poll_interval,
+            "tier2": self.settings.tier2_poll_interval,
+            "tier3": self.settings.tier3_poll_interval,
+        }
+
+        for tier_name, markets in tiers.items():
+            interval = tier_intervals.get(tier_name, self.settings.fetch_interval_seconds)
+            for tm in markets:
+                if tm.market.id:
+                    self._monitored_markets[tm.market.id] = tm.market
+                    self._market_poll_intervals[tm.market.id] = interval
+
+        tier_counts = {k: len(v) for k, v in tiers.items()}
+        logger.info(
+            f"Tiered monitoring: {tier_counts} "
+            f"(intervals: {tier_intervals}s), total={len(self._monitored_markets)}"
+        )
+
     # ================================================================
-    # Trade fetching: dispatches to internal or official API
+    # Trade fetching
     # ================================================================
 
-    _MAX_RETRIES = 3
-    _RETRY_BACKOFF = [1, 2, 4]  # seconds between retries
-
-    async def fetch_market_trades(self, market_id: str) -> List[TradeActivity]:
-        """
-        Fetch recent trades for a market. Dispatches to internal or official API
-        based on TRADE_API_MODE setting.
-        """
-        if self.settings.trade_api_mode == "internal":
-            return await self._fetch_trades_internal(market_id)
-        else:
-            return await self._fetch_trades_official(market_id)
+    _MAX_RETRIES = 4
+    _RETRY_BACKOFF = [2, 5, 10, 20]  # seconds between retries (with jitter)
 
     # ================================================================
     # Official Polymarket data-api: fetch trades
     # ================================================================
 
-    async def _fetch_trades_official(self, market_id: str) -> List[TradeActivity]:
+    async def fetch_market_trades(self, market_id: str) -> List[TradeActivity]:
         """
         Fetch recent trades using the official Polymarket data-api /trades endpoint.
 
@@ -200,12 +213,8 @@ class TradeMonitor:
 
             params: Dict[str, object] = {
                 "market": condition_id,
-                "limit": 50 if last_ts is None else 500,
+                "limit": 50,
             }
-
-            # Incremental polling: only fetch trades after last seen timestamp
-            if last_ts is not None:
-                params["after"] = last_ts + 1
 
             sem = self._api_sem or asyncio.Semaphore(20)
             last_err: Optional[Exception] = None
@@ -238,11 +247,11 @@ class TradeMonitor:
                     except httpx.HTTPError as e:
                         last_err = e
                         if attempt < self._MAX_RETRIES - 1:
-                            delay = self._RETRY_BACKOFF[attempt]
+                            delay = self._RETRY_BACKOFF[attempt] + random.uniform(0, 2)
                             logger.debug(
                                 f"Official API retry for {market_id} "
                                 f"(attempt {attempt + 1}/{self._MAX_RETRIES}): "
-                                f"{type(e).__name__}, retrying in {delay}s"
+                                f"{type(e).__name__}, retrying in {delay:.1f}s"
                             )
                             await asyncio.sleep(delay)
                         else:
@@ -322,153 +331,6 @@ class TradeMonitor:
             return []
         except Exception as e:
             logger.warning(f"Error fetching official trades for {market_id}: {type(e).__name__}: {e}")
-            return []
-
-    # ================================================================
-    # Internal API: fetch trades
-    # ================================================================
-
-    async def _fetch_trades_internal(self, market_id: str) -> List[TradeActivity]:
-        """
-        Fetch recent taker trades for a market using the internal /flows API.
-
-        /flows returns one record per taker per transaction (already aggregated
-        across maker fills), with accurate usd_amount and real execution price.
-        Uses incremental polling via start_ts.
-        Retries up to _MAX_RETRIES times on connection/timeout errors.
-        """
-        try:
-            last_ts = self._market_last_ts.get(market_id)
-
-            params: Dict[str, object] = {
-                "market_id": market_id,
-                "role": "taker",
-                # First poll: only fetch recent 50 trades to record txn hashes
-                # Subsequent polls: incremental via start_ts, small data
-                "limit": 50 if last_ts is None else 500,
-                "desc": True,
-            }
-
-            if last_ts is not None:
-                params["start_ts"] = last_ts + 1
-
-            # Semaphore limits concurrent requests; Lock enforces per-request interval
-            sem = self._api_sem or asyncio.Semaphore(20)
-            last_err: Optional[Exception] = None
-            async with sem:
-              for attempt in range(self._MAX_RETRIES):
-                try:
-                    # Global rate limit
-                    async with self._api_lock:
-                        now = _time.monotonic()
-                        wait = self._api_global_interval - (now - self._api_last_request)
-                        if wait > 0:
-                            await asyncio.sleep(wait)
-                        self._api_last_request = _time.monotonic()
-
-                    response = await self._internal_client.get(
-                        f"{self._internal_api_url}/flows", params=params,
-                    )
-                    response.raise_for_status()
-                    break  # success
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code in (502, 503, 504) and attempt < self._MAX_RETRIES - 1:
-                        delay = self._RETRY_BACKOFF[attempt]
-                        logger.debug(
-                            f"Internal API {e.response.status_code} for {market_id} "
-                            f"(attempt {attempt + 1}/{self._MAX_RETRIES}), "
-                            f"retrying in {delay}s"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    raise  # don't retry other HTTP errors
-                except httpx.HTTPError as e:
-                    last_err = e
-                    if attempt < self._MAX_RETRIES - 1:
-                        delay = self._RETRY_BACKOFF[attempt]
-                        logger.debug(
-                            f"Internal API retry for {market_id} "
-                            f"(attempt {attempt + 1}/{self._MAX_RETRIES}): "
-                            f"{type(e).__name__}, retrying in {delay}s"
-                        )
-                        await asyncio.sleep(delay)
-                    else:
-                        logger.warning(
-                            f"Internal API connection error for {market_id} "
-                            f"(attempt {attempt + 1}/{self._MAX_RETRIES}, giving up): "
-                            f"{type(e).__name__}: {e}"
-                        )
-                        return []
-              else:
-                # All retries exhausted (shouldn't reach here, but just in case)
-                return []
-
-            data = response.json()
-            if not data:
-                return []
-
-            activities = []
-            max_ts = last_ts or 0
-
-            for item in data:
-                try:
-                    raw_direction = item.get("direction", "")
-
-                    # Only track BUY trades (new positions).
-                    # SELL may just be exiting a position, not a directional signal.
-                    if raw_direction != "BUY":
-                        continue
-
-                    token_amount = float(item.get("token_amount", 0) or 0)
-                    raw_price = float(item.get("price", 0) or 0)
-                    usdc_size = float(item.get("usd_amount", 0) or 0)
-
-                    # No normalization — keep real price and outcome:
-                    # - nonusdc_side=token1: BUY Yes token at raw_price
-                    # - nonusdc_side=token2: BUY No token at raw_price
-                    nonusdc_side = item.get("nonusdc_side", "token1")
-                    outcome = "Yes" if nonusdc_side == "token1" else "No"
-
-                    ts = int(item.get("timestamp", 0) or 0)
-
-                    if ts > max_ts:
-                        max_ts = ts
-
-                    activity = TradeActivity(
-                        transaction_hash=f"{item.get('transaction_hash', '')}-{item.get('log_index', '')}",
-                        timestamp=ts,
-                        condition_id=item.get("condition_id", market_id),
-                        asset=item.get("condition_id", ""),
-                        side="BUY",
-                        size=token_amount,
-                        usdc_size=usdc_size,
-                        price=raw_price,
-                        outcome=outcome,
-                        outcome_index=0 if outcome == "Yes" else 1,
-                        title="",
-                        slug=None,
-                        event_slug=None,
-                        proxy_wallet=item.get("address"),
-                        name=None,
-                    )
-                    activities.append(activity)
-                except Exception as e:
-                    logger.debug(f"Failed to parse /flows trade: {e}")
-                    continue
-
-            if max_ts > 0:
-                self._market_last_ts[market_id] = max_ts
-
-            return activities
-
-        except httpx.HTTPStatusError as e:
-            logger.warning(
-                f"Flows API HTTP {e.response.status_code} for {market_id}: "
-                f"{e.response.text[:200]}"
-            )
-            return []
-        except Exception as e:
-            logger.warning(f"Error fetching flows for {market_id}: {type(e).__name__}: {e}")
             return []
 
     # ================================================================
@@ -761,37 +623,78 @@ class TradeMonitor:
 
     def _is_whale_trade(self, activity: TradeActivity, market: Optional[Market] = None) -> bool:
         """
-        Check if a trade qualifies as a whale trade.
+        Multi-layer pre-filter mirroring options flow SignalFilter._check_signal.
 
-        Uses a dynamic size threshold based on market volume:
-        - Large markets (24h vol > $1M): standard threshold (MIN_TRADE_SIZE_USD)
-        - Small markets (24h vol < $100k): lowered to $1,000
-        - In between: linearly interpolated
+        Filter chain (early rejection, same order as options flow):
+        1. Price range — like moneyness filter (OTM/ITM range)
+        2. Direction — BUY only (like enabled direction_filters)
+        3. Resolution window — like DTE filter (3-60 days sweet spot)
+        4. Size — like premium filter ($250K+ minimum)
+        5. Dynamic size — like dynamic_premium (base × √(vol / baseline))
+        6. Signal strength — like ask_ratio filter (conviction check)
         """
-        # Price filter: only BUY trades remain, price is the taker's buy price.
-        # Low price = cheap bet with high upside, high price = expensive/certain.
-        # Filter to [MIN_PRICE, MAX_PRICE] range (e.g. 0-0.7).
+        import math
+        from datetime import datetime as _dt
+
+        # --- 1. Price range (like moneyness: OTM 0-20%) ---
+        # Price 0.2-0.8 = uncertain outcome = tradeable
+        # Price < 0.2 or > 0.8 = near-consensus = no edge
         if not (self.settings.min_price <= activity.price <= self.settings.max_price):
             return False
 
-        # Dynamic threshold based on market total volume:
-        # - Tiny markets ($10k-$100k vol):  $1,000  (niche, info asymmetry high)
-        # - Medium markets ($100k-$5M vol): $5,000  (standard)
-        # - Large markets ($5M+ vol):       $10,000 (macro, noise high)
-        if market and market.volume > 0:
-            vol = market.volume  # total volume, not 24hr
-            if vol <= 10_000:
-                threshold = 500
-            elif vol <= 100_000:
-                threshold = 1_000
-            elif vol <= 5_000_000:
-                threshold = 5_000
-            else:
-                threshold = 10_000
-        else:
-            threshold = 5_000
+        # --- 2. Direction: BUY only (like direction_filters.enabled) ---
+        # Already enforced upstream (only BUY trades reach here)
 
-        return activity.usdc_size >= threshold
+        # --- 3. Resolution window (like DTE min=3, max=60) ---
+        # Markets resolving < 6 hours = price already settled (like DTE < 3)
+        # Markets resolving > 90 days = too far out, edge diluted (like DTE > 60)
+        if market and market.end_date:
+            try:
+                end_dt = _dt.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                now_dt = _dt.utcnow().replace(tzinfo=end_dt.tzinfo) if end_dt.tzinfo else _dt.utcnow()
+                hours_to_resolution = max(0, (end_dt - now_dt).total_seconds() / 3600)
+                if hours_to_resolution < 6:
+                    return False  # too close, like DTE < 3
+                if hours_to_resolution > 90 * 24:
+                    return False  # too far, like DTE > 60
+            except (ValueError, TypeError):
+                pass  # unknown end date, don't reject
+
+        # --- 4. Size (like premium min=$250K) ---
+        # Base minimum: $5,000 (Polymarket scale vs options $250K)
+        if activity.usdc_size < 5_000:
+            return False
+
+        # --- 5. Dynamic size (like dynamic_premium = base × √(mcap / baseline)) ---
+        # Larger markets require proportionally larger trades to be meaningful
+        base_size = 10_000.0
+        baseline_volume = 1_000_000.0
+
+        if market and market.volume > 0:
+            threshold = base_size * math.sqrt(market.volume / baseline_volume)
+            threshold = max(5_000.0, min(threshold, 100_000.0))  # floor $5K, cap $100K
+        else:
+            threshold = base_size
+
+        if activity.usdc_size < threshold:
+            return False
+
+        # --- 6. Signal strength (like ask_ratio > 70%) ---
+        # In Polymarket: buyer paying above market mid = conviction
+        # Reject trades at or below market mid (no conviction, possibly hedging)
+        if market and market.outcome_prices:
+            if activity.outcome == "Yes":
+                market_mid = market.outcome_prices[0]
+            elif len(market.outcome_prices) > 1:
+                market_mid = market.outcome_prices[1]
+            else:
+                market_mid = 1.0 - market.outcome_prices[0]
+
+            # Must pay above market mid (no discount buys = no conviction)
+            if activity.price < market_mid + 0.01:
+                return False
+
+        return True
 
     async def _handle_whale(self, activity: TradeActivity, market_id: str, market: Market):
         """
@@ -885,7 +788,9 @@ class TradeMonitor:
         if not market:
             return
 
-        poll_interval = self.settings.fetch_interval_seconds
+        # Per-market interval (from tiered monitoring) or global default
+        poll_intervals = getattr(self, '_market_poll_intervals', {})
+        poll_interval = poll_intervals.get(market_id, self.settings.fetch_interval_seconds)
         # If we already have a last_ts for this market, it means the loop was
         # restarted (e.g. after a market list refresh) — skip the silent
         # first-poll window to avoid missing trades.
@@ -955,7 +860,7 @@ class TradeMonitor:
 
         # Create lock/semaphore inside event loop (avoids "attached to different loop" error)
         self._api_lock = asyncio.Lock()
-        self._api_sem = asyncio.Semaphore(5)  # max 5 concurrent API requests
+        self._api_sem = asyncio.Semaphore(10)  # max 10 concurrent API requests
 
         logger.info(
             f"Starting parallel trade monitor "

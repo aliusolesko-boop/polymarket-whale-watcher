@@ -15,13 +15,6 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     llm_base_url: str = Field(default="http://apicz.boyuerichdata.com/v1/", alias="LLM_BASE_URL")
 
-    # Trade data API mode: "internal" (private API) or "official" (Polymarket data-api)
-    trade_api_mode: str = Field(default="official", alias="TRADE_API_MODE")
-
-    # Internal trade data API (only used when TRADE_API_MODE=internal)
-    internal_api_url: str = Field(default="http://103.197.25.170:18088", alias="INTERNAL_API_URL")
-    internal_api_key: str = Field(default="", alias="INTERNAL_API_KEY")
-
     # Twitter API (for social sentiment search)
     twitter_api_key: str = Field(default="", alias="TWITTER_API_KEY")
 
@@ -49,8 +42,6 @@ class Settings(BaseSettings):
     telegram_session_string: str = Field(default="", alias="TELEGRAM_SESSION_STRING")
     telegram_channels: str = Field(default="", alias="TELEGRAM_CHANNELS")
 
-    # Polygon Wallet
-    polygon_wallet_private_key: str = Field(default="", alias="POLYGON_WALLET_PRIVATE_KEY")
 
     # MongoDB
     mongodb_uri: str = Field(default="mongodb://localhost:27017/whale_watcher", alias="MONGODB_URI")
@@ -67,12 +58,19 @@ class Settings(BaseSettings):
     fetch_interval_seconds: int = Field(default=15, alias="FETCH_INTERVAL_SECONDS")
     trending_markets_limit: int = Field(default=50, alias="TRENDING_MARKETS_LIMIT")
 
+    # Tiered market monitoring (full-coverage mode)
+    full_market_scan: bool = Field(default=True, alias="FULL_MARKET_SCAN")
+    tier1_volume_min: float = Field(default=500_000, alias="TIER1_VOLUME_MIN")
+    tier2_volume_min: float = Field(default=10_000, alias="TIER2_VOLUME_MIN")
+    tier3_volume_min: float = Field(default=1_000, alias="TIER3_VOLUME_MIN")
+    tier1_poll_interval: int = Field(default=15, alias="TIER1_POLL_INTERVAL")
+    tier2_poll_interval: int = Field(default=60, alias="TIER2_POLL_INTERVAL")
+    tier3_poll_interval: int = Field(default=300, alias="TIER3_POLL_INTERVAL")
+
     # LLM Settings
     llm_model: str = Field(default="gemini-3-flash-preview", alias="LLM_MODEL")
     llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
 
-    # Trade Execution
-    enable_trade_execution: bool = Field(default=False, alias="ENABLE_TRADE_EXECUTION")
 
     # Email notification
     email_smtp_server: str = Field(default="smtp.qq.com", alias="EMAIL_SMTP_SERVER")

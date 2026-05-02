@@ -167,11 +167,20 @@ class TelegramSearchService:
             # Calculate per-channel limit
             limit_per_channel = max(3, limit // len(self.channels))
 
-            # Run async search (nest_asyncio allows nested run_until_complete)
-            loop = asyncio.get_event_loop()
-            messages = loop.run_until_complete(
-                self._search_all_channels(query, limit_per_channel)
-            )
+            # Run async search — handle both sync and async calling contexts
+            coro = self._search_all_channels(query, limit_per_channel)
+            try:
+                loop = asyncio.get_running_loop()
+                # Already inside an async event loop — use a new thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    messages = pool.submit(
+                        asyncio.run, coro
+                    ).result(timeout=30)
+            except RuntimeError:
+                # No running loop — safe to use run_until_complete
+                loop = asyncio.get_event_loop()
+                messages = loop.run_until_complete(coro)
 
             # Trim to total limit
             messages = messages[:limit]

@@ -372,6 +372,59 @@ class MarketFetcher:
             logger.error(f"Error fetching niche markets: {e}")
             return niche_markets
 
+    def get_tiered_markets(self) -> dict[str, list[TrendingMarket]]:
+        """
+        Fetch ALL active markets and classify into 3 tiers by 24h volume.
+
+        Returns dict with keys "tier1", "tier2", "tier3", each a list of TrendingMarket.
+        Mirrors options flow's "passive receive all signals" approach:
+        scan everything, filter later.
+        """
+        settings = self.settings
+        all_markets = self.get_all_current_markets()
+
+        tiers: dict[str, list[TrendingMarket]] = {"tier1": [], "tier2": [], "tier3": []}
+
+        for market in all_markets:
+            # Apply standard filters
+            raw = {
+                "question": market.question,
+                "description": market.description,
+                "slug": market.slug,
+            }
+            if self._should_filter_market(raw):
+                continue
+
+            if not market.clob_token_ids or not market.active or market.closed:
+                continue
+
+            vol = market.volume_24hr
+
+            tm = TrendingMarket(
+                market=market,
+                volume_24hr=vol,
+                liquidity=market.liquidity,
+            )
+
+            if vol >= settings.tier1_volume_min:
+                tiers["tier1"].append(tm)
+            elif vol >= settings.tier2_volume_min:
+                tiers["tier2"].append(tm)
+            elif vol >= settings.tier3_volume_min:
+                tiers["tier3"].append(tm)
+            # vol < tier3_volume_min → dead market, skip
+
+        # Sort each tier by volume descending
+        for tier in tiers.values():
+            tier.sort(key=lambda t: t.volume_24hr, reverse=True)
+
+        logger.info(
+            f"Tiered markets: Tier1={len(tiers['tier1'])} (>{settings.tier1_volume_min/1000:.0f}K), "
+            f"Tier2={len(tiers['tier2'])} (>{settings.tier2_volume_min/1000:.0f}K), "
+            f"Tier3={len(tiers['tier3'])} (>{settings.tier3_volume_min/1000:.0f}K)"
+        )
+        return tiers
+
     def get_market_by_id(self, market_id: str) -> Optional[Market]:
         """
         Fetch a single market by ID.
