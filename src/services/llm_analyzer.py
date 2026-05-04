@@ -275,7 +275,7 @@ class LLMAnalyzer:
                 call_kwargs = {
                     "model": self.settings.llm_model,
                     "messages": messages,
-                    "max_tokens": 4096,
+                    "max_tokens": 8192,
                 }
                 if tool_schemas and not is_last_round:
                     call_kwargs["tools"] = tool_schemas
