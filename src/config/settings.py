@@ -51,8 +51,8 @@ class Settings(BaseSettings):
 
     # Whale Detection Settings
     min_trade_size_usd: float = Field(default=1000.0, alias="MIN_TRADE_SIZE_USD")
-    min_price: float = Field(default=0.2, alias="MIN_PRICE")
-    max_price: float = Field(default=0.8, alias="MAX_PRICE")
+    min_price: float = Field(default=0.10, alias="MIN_PRICE")
+    max_price: float = Field(default=0.90, alias="MAX_PRICE")
 
     # Monitoring Settings
     fetch_interval_seconds: int = Field(default=15, alias="FETCH_INTERVAL_SECONDS")

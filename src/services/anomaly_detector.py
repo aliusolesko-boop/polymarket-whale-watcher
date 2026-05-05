@@ -247,7 +247,7 @@ class AnomalyDetector:
         market: Optional[Market] = None,
         trader_history: Optional[TraderHistory] = None,
         market_id: str = "",
-        min_score: float = 0.65,
+        min_score: float = 0.55,
     ) -> Tuple[bool, float, dict]:
         """
         Decide whether a whale trade warrants LLM analysis.
@@ -275,7 +275,7 @@ class AnomalyDetector:
     def filter_whale_trades(
         self,
         trades: List[WhaleTrade],
-        min_score: float = 0.65,
+        min_score: float = 0.55,
     ) -> List[WhaleTrade]:
         """Filter whale trades by confidence score."""
         filtered = []

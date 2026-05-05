@@ -653,26 +653,26 @@ class TradeMonitor:
                 end_dt = _dt.fromisoformat(market.end_date.replace("Z", "+00:00"))
                 now_dt = _dt.utcnow().replace(tzinfo=end_dt.tzinfo) if end_dt.tzinfo else _dt.utcnow()
                 hours_to_resolution = max(0, (end_dt - now_dt).total_seconds() / 3600)
-                if hours_to_resolution < 6:
+                if hours_to_resolution < 3:
                     return False  # too close, like DTE < 3
-                if hours_to_resolution > 90 * 24:
+                if hours_to_resolution > 180 * 24:
                     return False  # too far, like DTE > 60
             except (ValueError, TypeError):
                 pass  # unknown end date, don't reject
 
         # --- 4. Size (like premium min=$250K) ---
         # Base minimum: $5,000 (Polymarket scale vs options $250K)
-        if activity.usdc_size < 5_000:
+        if activity.usdc_size < 3_000:
             return False
 
         # --- 5. Dynamic size (like dynamic_premium = base × √(mcap / baseline)) ---
         # Larger markets require proportionally larger trades to be meaningful
-        base_size = 10_000.0
+        base_size = 5_000.0
         baseline_volume = 1_000_000.0
 
         if market and market.volume > 0:
             threshold = base_size * math.sqrt(market.volume / baseline_volume)
-            threshold = max(5_000.0, min(threshold, 100_000.0))  # floor $5K, cap $100K
+            threshold = max(3_000.0, min(threshold, 50_000.0))  # floor $3K, cap $50K
         else:
             threshold = base_size
 
