@@ -1,13 +1,13 @@
 """
 Polymarket Whale Watcher - Main Entry Point
 
-This bot monitors trending Polymarket markets for large (whale) trades
-and generates AI-powered analysis reports to assist user decision-making.
+This bot monitors Polymarket markets for large (whale) trades via
+real-time WebSocket (RTDS) and generates AI-powered analysis reports.
 
 Flow:
-1. Fetch trending markets (by 24hr volume, excluding sports)
-2. Monitor these markets for trades
-3. Detect anomalous trades ($1,000+, price 0.2-0.8)
+1. Fetch market list (for enrichment metadata)
+2. RTDS WebSocket receives ALL trades in real-time (zero missed trades)
+3. Filter for whale trades (size, price range, conviction)
 4. Generate analysis reports using LLM
 5. Output reports for user review (no automatic trading)
 """
@@ -312,15 +312,14 @@ class WhaleWatcher:
         # Log startup
         logger.monitoring_started(
             market_count=len(self.trade_monitor._monitored_markets),
-            interval=self.settings.fetch_interval_seconds,
             min_trade_size=self.settings.min_trade_size_usd,
             min_price=self.settings.min_price,
             max_price=self.settings.max_price,
         )
 
         # Start monitoring tasks:
-        # 1. Trade monitor - watches top markets for whale trades
-        # 2. Market refresh - refreshes the market list periodically
+        # 1. Trade monitor - RTDS WebSocket real-time trade stream
+        # 2. Market refresh - refreshes market metadata periodically
         # 3. Daily briefing - generates daily summary at midnight
         # 4. Resolution check - checks if markets with signals have resolved
         # NOTE: Price volatility monitor is temporarily disabled

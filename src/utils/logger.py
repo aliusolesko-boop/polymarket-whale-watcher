@@ -94,14 +94,14 @@ class WhaleWatcherLogger:
             f"[bold magenta]{'='*60}[/bold magenta]\n"
         )
 
-    def monitoring_started(self, market_count: int, interval: int, min_trade_size: float = 1000, min_price: float = 0.2, max_price: float = 0.8) -> None:
+    def monitoring_started(self, market_count: int, interval: int = 0, min_trade_size: float = 1000, min_price: float = 0.2, max_price: float = 0.8) -> None:
         """Log monitoring start."""
         self.console.print(
             f"\n[bold green]{'='*60}[/bold green]\n"
-            f"[bold green]🚀 WHALE WATCHER STARTED[/bold green]\n"
+            f"[bold green]🚀 WHALE WATCHER STARTED (RTDS WebSocket)[/bold green]\n"
             f"[bold green]{'='*60}[/bold green]\n"
-            f"[green]Monitoring:[/green] {market_count} markets\n"
-            f"[green]Interval:[/green] {interval} seconds\n"
+            f"[green]Monitored Markets:[/green] {market_count}\n"
+            f"[green]Mode:[/green] Real-time WebSocket (zero missed trades)\n"
             f"[green]Min Trade Size:[/green] ${min_trade_size:,.0f} USD\n"
             f"[green]Price Range:[/green] {min_price} - {max_price}\n"
             f"[bold green]{'='*60}[/bold green]\n"

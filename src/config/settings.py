@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # LLM API (OpenAI-compatible proxy)
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
-    llm_base_url: str = Field(default="http://apicz.boyuerichdata.com/v1/", alias="LLM_BASE_URL")
+    llm_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta/openai/", alias="LLM_BASE_URL")
 
     # Twitter API (for social sentiment search)
     twitter_api_key: str = Field(default="", alias="TWITTER_API_KEY")
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     tier3_poll_interval: int = Field(default=300, alias="TIER3_POLL_INTERVAL")
 
     # LLM Settings
-    llm_model: str = Field(default="gemini-3-flash-preview", alias="LLM_MODEL")
+    llm_model: str = Field(default="gemini-3.1-pro-preview", alias="LLM_MODEL")
     llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
 
 
