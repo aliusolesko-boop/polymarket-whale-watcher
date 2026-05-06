@@ -55,17 +55,13 @@ class Settings(BaseSettings):
     max_price: float = Field(default=0.90, alias="MAX_PRICE")
 
     # Monitoring Settings
-    fetch_interval_seconds: int = Field(default=15, alias="FETCH_INTERVAL_SECONDS")
     trending_markets_limit: int = Field(default=50, alias="TRENDING_MARKETS_LIMIT")
 
-    # Tiered market monitoring (full-coverage mode)
+    # Market coverage (volume thresholds for monitoring list)
     full_market_scan: bool = Field(default=True, alias="FULL_MARKET_SCAN")
     tier1_volume_min: float = Field(default=500_000, alias="TIER1_VOLUME_MIN")
     tier2_volume_min: float = Field(default=10_000, alias="TIER2_VOLUME_MIN")
     tier3_volume_min: float = Field(default=1_000, alias="TIER3_VOLUME_MIN")
-    tier1_poll_interval: int = Field(default=15, alias="TIER1_POLL_INTERVAL")
-    tier2_poll_interval: int = Field(default=60, alias="TIER2_POLL_INTERVAL")
-    tier3_poll_interval: int = Field(default=300, alias="TIER3_POLL_INTERVAL")
 
     # LLM Settings
     llm_model: str = Field(default="gemini-3.1-pro-preview", alias="LLM_MODEL")

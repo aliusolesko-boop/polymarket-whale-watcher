@@ -229,6 +229,7 @@ class TradeMonitor:
         3. Resolution window — like DTE filter (3-60 days sweet spot)
         4. Size — like premium filter ($250K+ minimum)
         5. Dynamic size — like dynamic_premium (base × √(vol / baseline))
+        5.5 Normalized size — like normalized_premium (usdc / √(vol))
         6. Signal strength — like ask_ratio filter (conviction check)
         """
         # --- 1. Price range ---
@@ -267,6 +268,16 @@ class TradeMonitor:
 
         if activity.usdc_size < threshold:
             return False
+
+        # --- 5.5 Normalized size (like normalized_premium) ---
+        # usdc_size / √(volume) makes signals comparable across market sizes.
+        # A $5K trade in a $50K market is far more significant than $20K in a $10M market.
+        if market and market.volume > 0:
+            normalized = activity.usdc_size / math.sqrt(market.volume)
+            # Minimum normalized threshold: filters out trades that are trivial
+            # relative to market size (calibrated: $5K in a $1M market → 5.0)
+            if normalized < 1.5:
+                return False
 
         # --- 6. Signal strength ---
         if market and market.outcome_prices:
