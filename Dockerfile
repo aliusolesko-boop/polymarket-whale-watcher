@@ -2,13 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies first (cached layer)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY src/ src/
+# Copy dependency definition and source code
 COPY pyproject.toml .
+COPY src/ src/
+
+# Install dependencies
+RUN pip install --no-cache-dir .
 
 # Create data directories
 RUN mkdir -p data reports daily_briefings
