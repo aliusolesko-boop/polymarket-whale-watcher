@@ -2,15 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copy dependency definition and source code
-COPY pyproject.toml .
-COPY src/ src/
+RUN pip install --upgrade pip setuptools wheel
 
-# Install dependencies
-RUN pip install --no-cache-dir .
+COPY . .
 
-# Create data directories
-RUN mkdir -p data reports daily_briefings
+RUN pip install requests && \
+    pip install -e .
 
-# Default command
 CMD ["python", "-m", "src.main", "run"]
