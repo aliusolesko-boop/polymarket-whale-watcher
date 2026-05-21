@@ -153,6 +153,7 @@ class WhaleWatcher:
         ias = decision.recommendation.information_asymmetry_score
         if ias >= 0.6:
             self._send_alert_email(whale_trade, full_report, ias)
+            send_alert_sync(f"WHALE {ias:.0%} ${trade.usdc_size:,.0f} {whale_trade.market_question[:60]}")
 
         logger.separator()
 
