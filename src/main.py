@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from src.services.telegram_alerts import send_telegram_alert
+from src.services.telegram_alerts import send_telegram_alert, send_alert_sync
 
 from src.config import get_settings
 from src.db.database import SignalDatabase
